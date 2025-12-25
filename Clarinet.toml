@@ -1,0 +1,14 @@
+[project]
+name = "stx-escrow"
+description = "Trustless P2P escrow system with Clarity 4 time-based timelocks"
+authors = ["Chidera"]
+telemetry = false
+cache_dir = "./.cache"
+
+[repl]
+analysis = { passes = ["check_checker"] }
+
+[contracts.escrow]
+path = "contracts/escrow.clar"
+clarity_version = 4
+epoch = 3.3
