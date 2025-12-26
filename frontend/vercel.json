@@ -1,0 +1,14 @@
+{
+  "buildCommand": "npm run build",
+  "devCommand": "npm run dev",
+  "installCommand": "npm install",
+  "framework": "nextjs",
+  "outputDirectory": ".next",
+  "regions": ["iad1"],
+  "env": {
+    "NEXT_PUBLIC_REOWN_PROJECT_ID": "@reown_project_id",
+    "NEXT_PUBLIC_CONTRACT_ADDRESS": "@contract_address",
+    "NEXT_PUBLIC_CONTRACT_NAME": "@contract_name",
+    "NEXT_PUBLIC_NETWORK": "@network"
+  }
+}
