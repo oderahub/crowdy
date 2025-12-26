@@ -3,8 +3,7 @@
 ;; 
 ;; New Clarity 4 Features Used:
 ;; - stacks-block-time: Real timestamps for timelocks
-;; - to-ascii: Convert principals to strings for logging
-;; - as-contract?: Secure asset handling
+;; - as-contract? (Clarity 4): Secure asset handling with allowances
 ;;
 ;; Designed for Stacks Builder Challenge Week 3
 
@@ -141,8 +140,11 @@
     (asserts! (> amount u0) ERR-INVALID-AMOUNT)
     (asserts! (not (is-eq tx-sender beneficiary)) ERR-SELF-ESCROW)
     
-    ;; Transfer STX to contract
-    (try! (stx-transfer? amount tx-sender (as-contract tx-sender)))
+    ;; Transfer STX to contract custody (Clarity 4 as-contract? with allowances)
+    ;; Get contract principal safely, then transfer TO it
+    (let ((contract-principal (unwrap-panic (as-contract? () tx-sender))))
+      (try! (stx-transfer? amount tx-sender contract-principal))
+    )
     
     ;; Store escrow with Clarity 4 timestamps
     (map-set escrows escrow-id {
@@ -174,8 +176,6 @@
       beneficiary: beneficiary,
       amount: amount,
       unlock-time: unlock-time,
-      depositor-ascii: (to-ascii tx-sender),
-      beneficiary-ascii: (to-ascii beneficiary)
     })
     
     (ok escrow-id)
@@ -199,11 +199,12 @@
     (asserts! (is-eq (get status escrow) "active") ERR-ALREADY-RELEASED)
     (asserts! (> remaining u0) ERR-INSUFFICIENT-FUNDS)
     
-    ;; Transfer to beneficiary
-    (try! (as-contract (stx-transfer? release-amount tx-sender (get beneficiary escrow))))
-    
-    ;; Transfer fee
-    (try! (as-contract (stx-transfer? fee-amount tx-sender (var-get treasury))))
+    ;; Transfer to beneficiary and fee (Clarity 4: with-stx allowance)
+    (unwrap! (as-contract? ((with-stx (get amount escrow)))
+      (try! (stx-transfer? release-amount tx-sender (get beneficiary escrow)))
+      (try! (stx-transfer? fee-amount tx-sender (var-get treasury)))
+      true
+    ) ERR-TRANSFER-FAILED)
     
     ;; Update escrow
     (map-set escrows escrow-id 
@@ -248,11 +249,12 @@
     (asserts! (<= release-amount remaining) ERR-INSUFFICIENT-FUNDS)
     (asserts! (> release-amount u0) ERR-INVALID-AMOUNT)
     
-    ;; Transfer to beneficiary
-    (try! (as-contract (stx-transfer? net-release tx-sender (get beneficiary escrow))))
-    
-    ;; Transfer fee
-    (try! (as-contract (stx-transfer? fee-amount tx-sender (var-get treasury))))
+    ;; Transfer to beneficiary and fee (Clarity 4: with-stx allowance)
+    (unwrap! (as-contract? ((with-stx release-amount))
+      (try! (stx-transfer? net-release tx-sender (get beneficiary escrow)))
+      (try! (stx-transfer? fee-amount tx-sender (var-get treasury)))
+      true
+    ) ERR-TRANSFER-FAILED)
     
     ;; Update escrow
     (map-set escrows escrow-id 
@@ -294,8 +296,11 @@
     (asserts! (> current-time (get timelock-until escrow)) ERR-TIMELOCK-ACTIVE)
     (asserts! (> remaining u0) ERR-INSUFFICIENT-FUNDS)
     
-    ;; Transfer back to depositor
-    (try! (as-contract (stx-transfer? remaining tx-sender (get depositor escrow))))
+    ;; Transfer back to depositor (Clarity 4: with-stx allowance)
+    (unwrap! (as-contract? ((with-stx remaining))
+      (try! (stx-transfer? remaining tx-sender (get depositor escrow)))
+      true
+    ) ERR-TRANSFER-FAILED)
     
     ;; Update escrow
     (map-set escrows escrow-id 
@@ -395,14 +400,15 @@
     (asserts! (is-eq tx-sender (unwrap-panic (get arbiter escrow))) ERR-UNAUTHORIZED)
     (asserts! (is-eq (get status escrow) "disputed") ERR-NOT-DISPUTED)
     
-    ;; Transfer based on resolution
-    (if release-to-beneficiary
-      (try! (as-contract (stx-transfer? net-amount tx-sender (get beneficiary escrow))))
-      (try! (as-contract (stx-transfer? net-amount tx-sender (get depositor escrow))))
-    )
-    
-    ;; Transfer fee
-    (try! (as-contract (stx-transfer? fee-amount tx-sender (var-get treasury))))
+    ;; Transfer based on resolution and fee (Clarity 4: with-stx allowance)
+    (unwrap! (as-contract? ((with-stx (get amount escrow)))
+      (try! (if release-to-beneficiary
+        (stx-transfer? net-amount tx-sender (get beneficiary escrow))
+        (stx-transfer? net-amount tx-sender (get depositor escrow))
+      ))
+      (try! (stx-transfer? fee-amount tx-sender (var-get treasury)))
+      true
+    ) ERR-TRANSFER-FAILED)
     
     ;; Update dispute
     (map-set disputes escrow-id 
