@@ -1,10 +1,9 @@
 ;; STX Escrow - Trustless P2P Trading
 ;; Clarity 4 (Epoch 3.3) - Uses new Clarity 4 features
-;; 
+;;
 ;; New Clarity 4 Features Used:
 ;; - stacks-block-time: Real timestamps for timelocks
-;; - to-ascii: Convert principals to strings for logging
-;; - as-contract?: Secure asset handling
+;; - as-contract?: Secure asset handling with allowances
 ;;
 ;; Designed for Stacks Builder Challenge Week 3
 
@@ -13,6 +12,7 @@
 ;; ============================================
 
 (define-constant CONTRACT-OWNER tx-sender)
+(define-data-var contract-address principal tx-sender)
 (define-constant ERR-NOT-OWNER (err u100))
 (define-constant ERR-ESCROW-NOT-FOUND (err u101))
 (define-constant ERR-UNAUTHORIZED (err u102))
@@ -84,7 +84,7 @@
 (define-private (update-depositor-stats (user principal) (amount uint))
   (let
     (
-      (current-stats (default-to 
+      (current-stats (default-to
         { escrows-created: u0, escrows-received: u0, escrows-completed: u0, disputes-involved: u0, total-deposited: u0, total-received: u0, last-activity: u0 }
         (map-get? user-stats user)))
     )
@@ -103,7 +103,7 @@
 (define-private (update-beneficiary-stats (user principal) (amount uint))
   (let
     (
-      (current-stats (default-to 
+      (current-stats (default-to
         { escrows-created: u0, escrows-received: u0, escrows-completed: u0, disputes-involved: u0, total-deposited: u0, total-received: u0, last-activity: u0 }
         (map-get? user-stats user)))
     )
@@ -124,7 +124,7 @@
 ;; ============================================
 
 ;; Create a new escrow with real-time timelock (Clarity 4)
-(define-public (create-escrow 
+(define-public (create-escrow
     (beneficiary principal)
     (amount uint)
     (description (string-ascii 200))
@@ -133,6 +133,7 @@
   (let
     (
       (escrow-id (+ (var-get escrow-count) u1))
+      (caller tx-sender)
       ;; Clarity 4: Use real timestamps
       (current-time stacks-block-time)
       (unlock-time (+ current-time timelock-seconds))
@@ -140,10 +141,9 @@
     ;; Validations
     (asserts! (> amount u0) ERR-INVALID-AMOUNT)
     (asserts! (not (is-eq tx-sender beneficiary)) ERR-SELF-ESCROW)
-    
-    ;; Transfer STX to contract
+
     (try! (stx-transfer? amount tx-sender (as-contract tx-sender)))
-    
+
     ;; Store escrow with Clarity 4 timestamps
     (map-set escrows escrow-id {
       depositor: tx-sender,
@@ -158,26 +158,24 @@
       created-at: stacks-block-height,
       completed-at: none
     })
-    
+
     ;; Update counter
     (var-set escrow-count escrow-id)
     (var-set total-volume (+ (var-get total-volume) amount))
-    
+
     ;; Update user stats
     (update-depositor-stats tx-sender amount)
-    
-    ;; Clarity 4: Better logging with to-ascii
-    (print { 
-      event: "escrow-created", 
-      escrow-id: escrow-id, 
+
+    ;; Clarity 4: Logging
+    (print {
+      event: "escrow-created",
+      escrow-id: escrow-id,
       depositor: tx-sender,
       beneficiary: beneficiary,
       amount: amount,
-      unlock-time: unlock-time,
-      depositor-ascii: (to-ascii tx-sender),
-      beneficiary-ascii: (to-ascii beneficiary)
+      unlock-time: unlock-time
     })
-    
+
     (ok escrow-id)
   )
 )
@@ -198,34 +196,35 @@
     (asserts! (is-eq tx-sender (get depositor escrow)) ERR-UNAUTHORIZED)
     (asserts! (is-eq (get status escrow) "active") ERR-ALREADY-RELEASED)
     (asserts! (> remaining u0) ERR-INSUFFICIENT-FUNDS)
-    
-    ;; Transfer to beneficiary
-    (try! (as-contract (stx-transfer? release-amount tx-sender (get beneficiary escrow))))
-    
-    ;; Transfer fee
-    (try! (as-contract (stx-transfer? fee-amount tx-sender (var-get treasury))))
-    
+
+    ;; Transfer funds using Clarity 4 as-contract? with allowances
+    (try! (as-contract? ((with-stx remaining))
+      (try! (stx-transfer? release-amount tx-sender (get beneficiary escrow)))
+      (try! (stx-transfer? fee-amount tx-sender (var-get treasury)))
+      (ok true)
+    ))
+
     ;; Update escrow
-    (map-set escrows escrow-id 
-      (merge escrow { 
+    (map-set escrows escrow-id
+      (merge escrow {
         released-amount: amount,
         status: "released",
         completed-at: (some current-time)
       })
     )
-    
+
     ;; Update stats
     (var-set total-escrows-completed (+ (var-get total-escrows-completed) u1))
     (update-beneficiary-stats (get beneficiary escrow) release-amount)
-    
-    (print { 
-      event: "escrow-released", 
-      escrow-id: escrow-id, 
+
+    (print {
+      event: "escrow-released",
+      escrow-id: escrow-id,
       beneficiary: (get beneficiary escrow),
       amount: release-amount,
       released-at: current-time
     })
-    
+
     (ok true)
   )
 )
@@ -247,31 +246,32 @@
     (asserts! (is-eq (get status escrow) "active") ERR-ALREADY-RELEASED)
     (asserts! (<= release-amount remaining) ERR-INSUFFICIENT-FUNDS)
     (asserts! (> release-amount u0) ERR-INVALID-AMOUNT)
-    
-    ;; Transfer to beneficiary
-    (try! (as-contract (stx-transfer? net-release tx-sender (get beneficiary escrow))))
-    
-    ;; Transfer fee
-    (try! (as-contract (stx-transfer? fee-amount tx-sender (var-get treasury))))
-    
+
+    ;; Transfer funds using Clarity 4 as-contract? with allowances
+    (try! (as-contract? ((with-stx release-amount))
+      (try! (stx-transfer? net-release tx-sender (get beneficiary escrow)))
+      (try! (stx-transfer? fee-amount tx-sender (var-get treasury)))
+      (ok true)
+    ))
+
     ;; Update escrow
-    (map-set escrows escrow-id 
-      (merge escrow { 
+    (map-set escrows escrow-id
+      (merge escrow {
         released-amount: (+ released release-amount)
       })
     )
-    
+
     ;; Update beneficiary stats
     (update-beneficiary-stats (get beneficiary escrow) net-release)
-    
-    (print { 
-      event: "partial-release", 
-      escrow-id: escrow-id, 
+
+    (print {
+      event: "partial-release",
+      escrow-id: escrow-id,
       amount: net-release,
       remaining: (- remaining release-amount),
       timestamp: current-time
     })
-    
+
     (ok true)
   )
 )
@@ -293,26 +293,28 @@
     ;; Clarity 4: Time-based timelock check
     (asserts! (> current-time (get timelock-until escrow)) ERR-TIMELOCK-ACTIVE)
     (asserts! (> remaining u0) ERR-INSUFFICIENT-FUNDS)
-    
-    ;; Transfer back to depositor
-    (try! (as-contract (stx-transfer? remaining tx-sender (get depositor escrow))))
-    
+
+    ;; Transfer back to depositor using Clarity 4 as-contract? with allowances
+    (try! (as-contract? ((with-stx remaining))
+      (stx-transfer? remaining tx-sender (get depositor escrow))
+    ))
+
     ;; Update escrow
-    (map-set escrows escrow-id 
-      (merge escrow { 
+    (map-set escrows escrow-id
+      (merge escrow {
         status: "refunded",
         completed-at: (some current-time)
       })
     )
-    
-    (print { 
-      event: "escrow-refunded", 
-      escrow-id: escrow-id, 
+
+    (print {
+      event: "escrow-refunded",
+      escrow-id: escrow-id,
       depositor: (get depositor escrow),
       amount: remaining,
       refunded-at: current-time
     })
-    
+
     (ok true)
   )
 )
@@ -325,8 +327,8 @@
       (current-time stacks-block-time)
     )
     ;; Either depositor or beneficiary can dispute
-    (asserts! 
-      (or 
+    (asserts!
+      (or
         (is-eq tx-sender (get depositor escrow))
         (is-eq tx-sender (get beneficiary escrow))
       )
@@ -334,7 +336,7 @@
     )
     (asserts! (is-eq (get status escrow) "active") ERR-ALREADY-RELEASED)
     (asserts! (is-none (map-get? disputes escrow-id)) ERR-ALREADY-DISPUTED)
-    
+
     ;; Create dispute with Clarity 4 timestamp
     (map-set disputes escrow-id {
       reason: reason,
@@ -343,42 +345,42 @@
       resolution: none,
       resolved-at: none
     })
-    
+
     ;; Update escrow status
-    (map-set escrows escrow-id 
+    (map-set escrows escrow-id
       (merge escrow { status: "disputed" })
     )
-    
+
     ;; Update user stats
     (let
       (
-        (current-stats (default-to 
+        (current-stats (default-to
           { escrows-created: u0, escrows-received: u0, escrows-completed: u0, disputes-involved: u0, total-deposited: u0, total-received: u0, last-activity: u0 }
           (map-get? user-stats tx-sender)))
       )
-      (map-set user-stats tx-sender 
-        (merge current-stats { 
+      (map-set user-stats tx-sender
+        (merge current-stats {
           disputes-involved: (+ (get disputes-involved current-stats) u1),
           last-activity: current-time
         })
       )
     )
-    
-    (print { 
-      event: "dispute-raised", 
-      escrow-id: escrow-id, 
+
+    (print {
+      event: "dispute-raised",
+      escrow-id: escrow-id,
       disputed-by: tx-sender,
       reason: reason,
       timestamp: current-time
     })
-    
+
     (ok true)
   )
 )
 
 ;; Resolve dispute (arbiter only)
-(define-public (resolve-dispute 
-    (escrow-id uint) 
+(define-public (resolve-dispute
+    (escrow-id uint)
     (resolution (string-ascii 200))
     (release-to-beneficiary bool))
   (let
@@ -394,40 +396,41 @@
     (asserts! (is-some (get arbiter escrow)) ERR-UNAUTHORIZED)
     (asserts! (is-eq tx-sender (unwrap-panic (get arbiter escrow))) ERR-UNAUTHORIZED)
     (asserts! (is-eq (get status escrow) "disputed") ERR-NOT-DISPUTED)
-    
-    ;; Transfer based on resolution
-    (if release-to-beneficiary
-      (try! (as-contract (stx-transfer? net-amount tx-sender (get beneficiary escrow))))
-      (try! (as-contract (stx-transfer? net-amount tx-sender (get depositor escrow))))
-    )
-    
-    ;; Transfer fee
-    (try! (as-contract (stx-transfer? fee-amount tx-sender (var-get treasury))))
-    
+
+    ;; Transfer funds using Clarity 4 as-contract? with allowances
+    (try! (as-contract? ((with-stx amount))
+      (if release-to-beneficiary
+        (try! (stx-transfer? net-amount tx-sender (get beneficiary escrow)))
+        (try! (stx-transfer? net-amount tx-sender (get depositor escrow)))
+      )
+      (try! (stx-transfer? fee-amount tx-sender (var-get treasury)))
+      (ok true)
+    ))
+
     ;; Update dispute
-    (map-set disputes escrow-id 
-      (merge dispute { 
+    (map-set disputes escrow-id
+      (merge dispute {
         resolution: (some resolution),
         resolved-at: (some current-time)
       })
     )
-    
+
     ;; Update escrow
-    (map-set escrows escrow-id 
-      (merge escrow { 
+    (map-set escrows escrow-id
+      (merge escrow {
         status: "resolved",
         completed-at: (some current-time)
       })
     )
-    
-    (print { 
-      event: "dispute-resolved", 
-      escrow-id: escrow-id, 
+
+    (print {
+      event: "dispute-resolved",
+      escrow-id: escrow-id,
       resolution: resolution,
       released-to: (if release-to-beneficiary (get beneficiary escrow) (get depositor escrow)),
       resolved-at: current-time
     })
-    
+
     (ok true)
   )
 )
@@ -449,7 +452,7 @@
 )
 
 (define-read-only (get-user-stats (user principal))
-  (default-to 
+  (default-to
     { escrows-created: u0, escrows-received: u0, escrows-completed: u0, disputes-involved: u0, total-deposited: u0, total-received: u0, last-activity: u0 }
     (map-get? user-stats user))
 )
