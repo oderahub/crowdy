@@ -1,0 +1,35 @@
+{
+  "name": "stx-escrow",
+  "version": "1.0.0",
+  "description": "Trustless P2P escrow service built with **Clarity 4** (Epoch 3.3) and **Next.js 15.1.0**.",
+  "main": "index.js",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/oderahub/crowdy.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "bugs": {
+    "url": "https://github.com/oderahub/crowdy/issues"
+  },
+  "homepage": "https://github.com/oderahub/crowdy#readme",
+  "dependencies": {
+    "@hirosystems/clarinet-sdk": "^3.8.1",
+    "@stacks/clarinet-sdk": "^3.12.0",
+    "@stacks/transactions": "^7.3.1",
+    "vitest": "^4.0.16"
+  },
+  "devDependencies": {
+    "@types/node": "^25.0.3",
+    "typescript": "^5.9.3"
+  }
+}
